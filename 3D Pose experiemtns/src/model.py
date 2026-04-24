@@ -393,7 +393,7 @@ class I2S_ResNet(nn.Module):
         self.temperature = float(temperature)
 
         self._mv_dim = int(2**algebra.dim)
-        self.conv_adapter_output = 16
+        self.conv_adapter_output = 8
         self._n_mv = self.conv_adapter_output**2
         if self._mv_dim != 8:
             raise ValueError(f"I2S_ResNet expects mv_dim=8, got {self._mv_dim}")
