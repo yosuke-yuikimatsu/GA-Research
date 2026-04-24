@@ -11,6 +11,42 @@ from image2sphere.so3_utils import so3_healpix_grid, flat_wigner, nearest_rotmat
 from e3nn import o3
 from typing import List, Union
 
+
+def _unit_quaternion_to_matrix(q: torch.Tensor) -> torch.Tensor:
+    if q.ndim != 2 or q.shape[-1] != 4:
+        raise ValueError(f"Expected quaternion shape [B, 4], got {tuple(q.shape)}")
+    q = q / q.norm(dim=-1, keepdim=True).clamp_min(1e-8)
+    w, x, y, z = q.unbind(dim=-1)
+
+    ww = w * w
+    xx = x * x
+    yy = y * y
+    zz = z * z
+    wx = w * x
+    wy = w * y
+    wz = w * z
+    xy = x * y
+    xz = x * z
+    yz = y * z
+
+    return torch.stack(
+        [
+            torch.stack((ww + xx - yy - zz, 2 * (xy - wz), 2 * (xz + wy)), dim=-1),
+            torch.stack((2 * (xy + wz), ww - xx + yy - zz, 2 * (yz - wx)), dim=-1),
+            torch.stack((2 * (xz - wy), 2 * (yz + wx), ww - xx - yy + zz), dim=-1),
+        ],
+        dim=-2,
+    )
+
+
+def _project_multivector_to_rotor(mv: torch.Tensor) -> torch.Tensor:
+    if mv.ndim != 2 or mv.shape[-1] != 8:
+        raise ValueError(f"Expected multivector shape [B, 8], got {tuple(mv.shape)}")
+    rotor = mv[:, [0, 4, 5, 6]]
+    rotor = rotor / rotor.norm(dim=-1, keepdim=True).clamp_min(1e-8)
+    return rotor
+
+
 def _so3_num_fourier_coeffs(lmax: int) -> int:
     return sum([(2 * l + 1) ** 2 for l in range(lmax + 1)])
 
@@ -398,8 +434,8 @@ class I2S_ResNet(nn.Module):
         if self._mv_dim != 8:
             raise ValueError(f"I2S_ResNet expects mv_dim=8, got {self._mv_dim}")
 
-        if output_mode not in {"auto", "rotation_matrix", "fourier"}:
-            raise ValueError("output_mode must be one of: auto, rotation_matrix, fourier")
+        if output_mode not in {"auto", "rotation_matrix", "fourier", "rotor", "multivector_rotor"}:
+            raise ValueError("output_mode must be one of: auto, rotation_matrix, fourier, rotor, multivector_rotor")
         self.output_mode = output_mode
 
         backbone_weights = torchvision.models.ResNet50_Weights.DEFAULT if pretrained_backbone else None
@@ -451,6 +487,18 @@ class I2S_ResNet(nn.Module):
             hidden_dim=hidden_dim,
             out_features=9,
         )
+        self.ga_head_rotor = TralaleroTralala(
+            algebra=algebra,
+            in_features=self._n_mv,
+            hidden_dim=hidden_dim,
+            out_features=4,
+        )
+        self.ga_head_mv_rotor = TralaleroTralala(
+            algebra=algebra,
+            in_features=self._n_mv,
+            hidden_dim=hidden_dim,
+            out_features=1,
+        )
 
         xyx = so3_healpix_grid(rec_level=self.rec_level)
         wign = flat_wigner(self.lmax, *xyx)
@@ -491,6 +539,15 @@ class I2S_ResNet(nn.Module):
             rot_mv = self.ga_head_rotation(tokens)
             rot = rot_mv[..., 0].reshape(x.shape[0], 3, 3)
             return rot
+        if mode == "rotor":
+            rotor_mv = self.ga_head_rotor(tokens)
+            rotor = rotor_mv[..., 0]
+            rotor = rotor / rotor.norm(dim=-1, keepdim=True).clamp_min(1e-8)
+            return rotor
+        if mode == "multivector_rotor":
+            mv = self.ga_head_mv_rotor(tokens)
+            mv = mv[:, 0, :]
+            return mv
         raise ValueError(f"Unsupported mode: {mode}")
 
     def logits_on_grid(self, coeffs: torch.Tensor) -> torch.Tensor:
@@ -510,8 +567,24 @@ class I2S_ResNet(nn.Module):
 
     @torch.no_grad()
     def predict(self, x):
-        idx = self.predict_rotmat(self.forward(x))
-        return self.so3_rotmats_cache[idx]
+        out = self.forward(x)
+        mode = self._resolve_mode()
+
+        if mode == "fourier":
+            idx = self.predict_rotmat(out)
+            return self.so3_rotmats_cache[idx]
+
+        if mode == "rotation_matrix":
+            return out
+
+        if mode == "rotor":
+            return _unit_quaternion_to_matrix(out)
+
+        if mode == "multivector_rotor":
+            rotor = _project_multivector_to_rotor(out)
+            return _unit_quaternion_to_matrix(rotor)
+
+        raise ValueError(f"Unsupported mode: {mode}")
 
     @torch.no_grad()
     def get_nearest_idx(self, rot_gt: torch.Tensor):
