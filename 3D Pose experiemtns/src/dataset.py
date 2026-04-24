@@ -10,8 +10,11 @@ CACHE_FILE_VERSION = 1
 
 
 def _in_memory_cache_path(config, split: str) -> Path:
-    dataset_root = Path(config.path_to_datasets)
-    cache_dir = dataset_root / "cache"
+    if config.platform == "kaggle":
+        cache_dir = Path("/kaggle/working/cache")
+    else:
+        cache_dir = Path(config.path_to_datasets) / "cache"
+
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir / f"pascal3d_{split}_in_memory_v{CACHE_FILE_VERSION}.pt"
 
