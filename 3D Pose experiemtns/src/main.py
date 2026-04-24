@@ -115,7 +115,12 @@ def instantiate(config):
     else:
         raise ValueError(f"Unknown loss: {config.loss}")
 
-    run = wandb_create_run(config.run_name)
+    run = wandb_create_run(
+        config.run_name,
+        project=config.wandb_project,
+        entity=config.wandb_entity,
+        group=config.wandb_group,
+    )
     print("W&B logging set up completed")
 
     return train_loader, val_loader, model, optimizer, scheduler, criterion, run

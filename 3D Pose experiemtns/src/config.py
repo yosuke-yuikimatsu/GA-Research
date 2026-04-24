@@ -9,6 +9,9 @@ def create_argparser():
     parser.add_argument("--path_to_datasets", type=str, required=True)
     parser.add_argument("--path_to_checkpoint",type=str,default=None)
     parser.add_argument("--run_name", type=str, default=None)
+    parser.add_argument("--wandb_project", type=str, default="CLIP")
+    parser.add_argument("--wandb_entity", type=str, default="clifforders")
+    parser.add_argument("--wandb_group", type=str, default=None)
     parser.add_argument("--sanity_check", action="store_true")
     parser.add_argument("--platform",type=str,choices=["kaggle","colab"],default="kaggle")
 
@@ -61,3 +64,6 @@ class JsonYamlevich:
     n_epochs: int = 1
     batch_size: int = 32
     path_to_datasets: str = "/Users/chaykovsky/Downloads/"
+    wandb_project: str = "CLIP"
+    wandb_entity: str | None = "clifforders"
+    wandb_group: str | None = None
