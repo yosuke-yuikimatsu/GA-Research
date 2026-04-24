@@ -18,7 +18,7 @@ def create_argparser():
     parser.add_argument("--model", type=str, default="tralalero",
                         choices=["tralalero", "mlp", "i2s", "ga_i2s", "i2s_resnet"])
     parser.add_argument("--loss", type=str, default="mse",
-                        choices=["mse", "prob"])
+                        choices=["mse", "prob", "rotor", "mv_rotor"])
     parser.add_argument("--encoder", type=str, default="resnet",
                         choices=["resnet", "ga", "ga_canonical"])
 
@@ -33,7 +33,7 @@ def create_argparser():
         "--i2s_resnet_output_mode",
         type=str,
         default="auto",
-        choices=["auto", "rotation_matrix", "fourier"],
+        choices=["auto", "rotation_matrix", "fourier", "rotor", "multivector_rotor"],
     )
     parser.add_argument(
         "--i2s_resnet_pretrained_backbone",
