@@ -27,15 +27,49 @@ from src.wandb_utils import (
 
 
 
-def _make_algebra():
-    return CliffordAlgebra((1, 1, 1))
+def _make_algebra(algebra_dim: int):
+    algebra_dim = int(algebra_dim)
+    if algebra_dim <= 0:
+        raise ValueError("algebra_dim must be positive")
+
+    mv_dim = 2 ** algebra_dim
+    if algebra_dim > 6:
+        print(
+            f"Warning: algebra_dim={algebra_dim} gives mv_dim={mv_dim}. "
+            "This can significantly increase memory usage and runtime."
+        )
+
+    return CliffordAlgebra(tuple([1] * algebra_dim))
 
 
 def instantiate(config):
     train_loader, val_loader = create_dataloaders(config)
     print("Created Tralaloaders")
 
-    algebra = _make_algebra()
+    config.algebra_dim = int(config.algebra_dim)
+    if config.algebra_dim <= 0:
+        raise ValueError("algebra_dim must be positive")
+
+    if config.model != "i2s_resnet" and config.algebra_dim != 3:
+        raise ValueError(
+            "Variable algebra_dim is currently supported only for model='i2s_resnet'. "
+            "Use --model i2s_resnet or set --algebra_dim 3."
+        )
+
+    rotor_losses = {"rotor", "mv_rotor"}
+    rotor_modes = {"rotor", "multivector_rotor"}
+    requested_rotor_mode = (
+        config.loss in rotor_losses
+        or getattr(config, "i2s_resnet_output_mode", None) in rotor_modes
+    )
+    if requested_rotor_mode and config.algebra_dim != 3:
+        raise ValueError(
+            "rotor and mv_rotor modes currently require algebra_dim=3, "
+            "because rotor extraction is implemented specifically for Cl(3,0). "
+            "Use --algebra_dim 3 or implement generalized rotor extraction."
+        )
+
+    algebra = _make_algebra(config.algebra_dim)
 
     if config.model == "tralalero":
         model = TralaleroCompetitor(
@@ -90,6 +124,7 @@ def instantiate(config):
             mv_per_position=config.i2s_resnet_mv_per_position,
             adapter_mid_channels=config.i2s_resnet_adapter_mid_channels,
             adapter_high_channels=config.i2s_resnet_adapter_high_channels,
+            adapter_output_size=config.i2s_resnet_adapter_output_size,
         )
     else:
         raise ValueError(f"Unknown model: {config.model}")
