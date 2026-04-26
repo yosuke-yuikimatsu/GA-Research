@@ -424,6 +424,7 @@ class I2S_ResNet(nn.Module):
         mv_per_position: int = 1,
         adapter_mid_channels: int = 0,
         adapter_high_channels: int = 0,
+        adapter_output_size: int = 16,
     ):
         super().__init__()
         self.algebra = algebra
@@ -436,8 +437,17 @@ class I2S_ResNet(nn.Module):
         if self.mv_per_position <= 0:
             raise ValueError("mv_per_position must be positive")
 
-        self.conv_adapter_output = 16
+        self.conv_adapter_output = int(adapter_output_size)
+        if self.conv_adapter_output <= 0:
+            raise ValueError("adapter_output_size must be positive")
         self._n_mv = self.conv_adapter_output ** 2 * self.mv_per_position
+        if self._n_mv > 4096:
+            print(
+                f"Warning: I2S_ResNet uses {self._n_mv} multivector tokens "
+                f"(adapter_output_size={self.conv_adapter_output}, "
+                f"mv_per_position={self.mv_per_position}). "
+                "This may be memory intensive."
+            )
         adapter_out_channels = self.mv_per_position * self._mv_dim
         auto_mid_channels = max(64, adapter_out_channels * 2)
         auto_high_channels = max(256, auto_mid_channels * 2)

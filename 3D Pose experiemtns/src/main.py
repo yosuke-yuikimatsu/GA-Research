@@ -124,6 +124,7 @@ def instantiate(config):
             mv_per_position=config.i2s_resnet_mv_per_position,
             adapter_mid_channels=config.i2s_resnet_adapter_mid_channels,
             adapter_high_channels=config.i2s_resnet_adapter_high_channels,
+            adapter_output_size=config.i2s_resnet_adapter_output_size,
         )
     else:
         raise ValueError(f"Unknown model: {config.model}")

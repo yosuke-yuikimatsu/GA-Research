@@ -66,6 +66,11 @@ def create_argparser():
         type=int,
         default=0,
     )
+    parser.add_argument(
+        "--i2s_resnet_adapter_output_size",
+        type=int,
+        default=16,
+    )
     parser.add_argument("--label_smoothing", type=float, default=0.0)
     parser.add_argument("--ram_memory", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--multi_gpu", action=argparse.BooleanOptionalAction, default=True)
