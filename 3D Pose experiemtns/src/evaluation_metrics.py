@@ -35,6 +35,11 @@ def unit_quaternion_to_matrix(q: torch.Tensor) -> torch.Tensor:
 
 
 def project_multivector_to_rotor(mv: torch.Tensor) -> torch.Tensor:
+    if mv.shape[-1] != 8:
+        raise ValueError(
+            "project_multivector_to_rotor currently supports only Cl(3,0), "
+            f"expected mv_dim=8, got {mv.shape[-1]}"
+        )
     rotor = mv[:, [0, 4, 5, 6]]
     rotor = rotor / rotor.norm(dim=-1, keepdim=True).clamp_min(1e-8)
     return rotor

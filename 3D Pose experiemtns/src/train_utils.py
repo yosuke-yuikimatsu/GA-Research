@@ -87,6 +87,12 @@ def multivector_rotor_loss(
     lambda_non_even: float = 0.1,
     lambda_norm: float = 0.1,
 ) -> torch.Tensor:
+    if pred_mv.shape[-1] != 8:
+        raise ValueError(
+            "multivector_rotor_loss currently supports only Cl(3,0), "
+            f"expected mv_dim=8, got {pred_mv.shape[-1]}"
+        )
+
     rotor = pred_mv[:, [0, 4, 5, 6]]
     non_rotor = pred_mv[:, [1, 2, 3, 7]]
 

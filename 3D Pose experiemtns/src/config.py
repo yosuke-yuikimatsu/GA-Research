@@ -21,6 +21,7 @@ def create_argparser():
                         choices=["mse", "prob", "rotor", "mv_rotor"])
     parser.add_argument("--encoder", type=str, default="resnet",
                         choices=["resnet", "ga", "ga_canonical"])
+    parser.add_argument("--algebra_dim", type=int, default=3)
 
     # I2S
     parser.add_argument("--lmax", type=int, default=6)

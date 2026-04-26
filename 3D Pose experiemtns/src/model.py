@@ -438,9 +438,6 @@ class I2S_ResNet(nn.Module):
 
         self.conv_adapter_output = 16
         self._n_mv = self.conv_adapter_output ** 2 * self.mv_per_position
-        if self._mv_dim != 8:
-            raise ValueError(f"I2S_ResNet expects mv_dim=8, got {self._mv_dim}")
-
         adapter_out_channels = self.mv_per_position * self._mv_dim
         auto_mid_channels = max(64, adapter_out_channels * 2)
         auto_high_channels = max(256, auto_mid_channels * 2)
@@ -472,6 +469,11 @@ class I2S_ResNet(nn.Module):
         if output_mode not in {"auto", "rotation_matrix", "fourier", "rotor", "multivector_rotor"}:
             raise ValueError("output_mode must be one of: auto, rotation_matrix, fourier, rotor, multivector_rotor")
         self.output_mode = output_mode
+        if self.output_mode in {"rotor", "multivector_rotor"} and self._mv_dim != 8:
+            raise ValueError(
+                "I2S_ResNet rotor/multivector_rotor modes currently require Cl(3,0), "
+                f"expected mv_dim=8, got mv_dim={self._mv_dim}."
+            )
 
         backbone_weights = torchvision.models.ResNet50_Weights.DEFAULT if pretrained_backbone else None
         resnet = torchvision.models.resnet50(weights=backbone_weights)
