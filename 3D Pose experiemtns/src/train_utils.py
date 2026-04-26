@@ -11,10 +11,7 @@ def rotation_matrix_loss(pred, target, alpha=0.1, beta=0.01):
     eye = torch.eye(3, device=pred.device).unsqueeze(0)
     ortho = torch.mean((pred.transpose(1, 2) @ pred - eye) ** 2)
 
-    det = torch.det(pred)
-    det_loss = torch.mean((det - 1.0) ** 2)
-
-    return mse + alpha * ortho + beta * det_loss
+    return mse + alpha * ortho
 
 
 def matrix_to_unit_quaternion(rot: torch.Tensor) -> torch.Tensor:
