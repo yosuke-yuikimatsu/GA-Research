@@ -421,6 +421,9 @@ class I2S_ResNet(nn.Module):
         freeze_backbone: bool = True,
         use_positional_encoding: bool = True,
         output_mode: str = "auto",
+        mv_per_position: int = 1,
+        adapter_mid_channels: int = 0,
+        adapter_high_channels: int = 0,
     ):
         super().__init__()
         self.algebra = algebra
@@ -429,10 +432,42 @@ class I2S_ResNet(nn.Module):
         self.temperature = float(temperature)
 
         self._mv_dim = int(2**algebra.dim)
-        self.conv_adapter_output = 8
-        self._n_mv = self.conv_adapter_output**2
+        self.mv_per_position = int(mv_per_position)
+        if self.mv_per_position <= 0:
+            raise ValueError("mv_per_position must be positive")
+
+        self.conv_adapter_output = 16
+        self._n_mv = self.conv_adapter_output ** 2 * self.mv_per_position
         if self._mv_dim != 8:
             raise ValueError(f"I2S_ResNet expects mv_dim=8, got {self._mv_dim}")
+
+        adapter_out_channels = self.mv_per_position * self._mv_dim
+        auto_mid_channels = max(64, adapter_out_channels * 2)
+        auto_high_channels = max(256, auto_mid_channels * 2)
+
+        self.adapter_mid_channels = (
+            int(adapter_mid_channels)
+            if int(adapter_mid_channels) > 0
+            else auto_mid_channels
+        )
+
+        self.adapter_high_channels = (
+            int(adapter_high_channels)
+            if int(adapter_high_channels) > 0
+            else auto_high_channels
+        )
+
+        if self.adapter_mid_channels < adapter_out_channels:
+            raise ValueError(
+                "adapter_mid_channels must be >= mv_per_position * mv_dim "
+                f"({adapter_out_channels}), got {self.adapter_mid_channels}"
+            )
+
+        if self.adapter_high_channels < self.adapter_mid_channels:
+            raise ValueError(
+                "adapter_high_channels must be >= adapter_mid_channels, "
+                f"got high={self.adapter_high_channels}, mid={self.adapter_mid_channels}"
+            )
 
         if output_mode not in {"auto", "rotation_matrix", "fourier", "rotor", "multivector_rotor"}:
             raise ValueError("output_mode must be one of: auto, rotation_matrix, fourier, rotor, multivector_rotor")
@@ -456,15 +491,26 @@ class I2S_ResNet(nn.Module):
                 p.requires_grad = False
 
         self.conv_adapter = nn.Sequential(
-            nn.Conv2d(2048, 256, kernel_size=1, bias=False),
-            nn.BatchNorm2d(256),
+            nn.Conv2d(2048, self.adapter_high_channels, kernel_size=1, bias=False),
+            nn.BatchNorm2d(self.adapter_high_channels),
             nn.SiLU(inplace=True),
 
-            nn.Conv2d(256, 64, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(64),
+            nn.Conv2d(
+                self.adapter_high_channels,
+                self.adapter_mid_channels,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+            ),
+            nn.BatchNorm2d(self.adapter_mid_channels),
             nn.SiLU(inplace=True),
 
-            nn.Conv2d(64, self._mv_dim, kernel_size=1, bias=True),
+            nn.Conv2d(
+                self.adapter_mid_channels,
+                adapter_out_channels,
+                kernel_size=1,
+                bias=True,
+            ),
 
             nn.AdaptiveAvgPool2d((self.conv_adapter_output, self.conv_adapter_output)),
         )
@@ -514,12 +560,42 @@ class I2S_ResNet(nn.Module):
     def _encode_tokens(self, x: torch.Tensor) -> torch.Tensor:
         fmap = self.backbone(x)
         adapted = self.conv_adapter(fmap)
+
         b, c, h, w = adapted.shape
-        if (c, h, w) != (self._mv_dim, self.conv_adapter_output, self.conv_adapter_output):
-            raise RuntimeError(f"Expected adapted features [B, {self._mv_dim}, {self.conv_adapter_output}, {self.conv_adapter_output}], got [B, {c}, {h}, {w}]")
-        tokens = adapted.flatten(2).transpose(1, 2)
+
+        expected_c = self.mv_per_position * self._mv_dim
+        expected_h = self.conv_adapter_output
+        expected_w = self.conv_adapter_output
+
+        if (c, h, w) != (expected_c, expected_h, expected_w):
+            raise RuntimeError(
+                f"Expected adapted features [B, {expected_c}, {expected_h}, {expected_w}], "
+                f"got [B, {c}, {h}, {w}]"
+            )
+
+        tokens = adapted.reshape(
+            b,
+            self.mv_per_position,
+            self._mv_dim,
+            h,
+            w,
+        )
+
+        tokens = tokens.permute(0, 3, 4, 1, 2).reshape(
+            b,
+            h * w * self.mv_per_position,
+            self._mv_dim,
+        )
+
+        if tokens.shape[1] != self._n_mv or tokens.shape[2] != self._mv_dim:
+            raise RuntimeError(
+                f"Expected tokens [B, {self._n_mv}, {self._mv_dim}], "
+                f"got {list(tokens.shape)}"
+            )
+
         if self.use_positional_encoding:
             tokens = tokens + self.positional_embedding
+
         return tokens
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
