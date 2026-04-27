@@ -37,6 +37,12 @@ def create_argparser():
         choices=["auto", "rotation_matrix", "fourier", "rotor", "multivector_rotor"],
     )
     parser.add_argument(
+        "--i2s_resnet_backbone_name",
+        type=str,
+        default="resnet50",
+        choices=["resnet50", "convnext_tiny"],
+    )
+    parser.add_argument(
         "--i2s_resnet_pretrained_backbone",
         action=argparse.BooleanOptionalAction,
         default=True,
