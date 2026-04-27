@@ -409,7 +409,7 @@ class MLPBaseline(nn.Module):
         return x
 
 
-class I2S_ResNet(nn.Module):
+class I2S_Backbone(nn.Module):
     def __init__(
         self,
         algebra,
@@ -417,6 +417,7 @@ class I2S_ResNet(nn.Module):
         rec_level: int = 3,
         hidden_dim: List = [32],
         temperature: float = 1.0,
+        backbone_name: str = "resnet50",
         pretrained_backbone: bool = True,
         freeze_backbone: bool = True,
         use_positional_encoding: bool = True,
@@ -431,6 +432,7 @@ class I2S_ResNet(nn.Module):
         self.lmax = int(lmax)
         self.rec_level = int(rec_level)
         self.temperature = float(temperature)
+        self.backbone_name = str(backbone_name).lower()
 
         self._mv_dim = int(2**algebra.dim)
         self.mv_per_position = int(mv_per_position)
@@ -443,7 +445,7 @@ class I2S_ResNet(nn.Module):
         self._n_mv = self.conv_adapter_output ** 2 * self.mv_per_position
         if self._n_mv > 4096:
             print(
-                f"Warning: I2S_ResNet uses {self._n_mv} multivector tokens "
+                f"Warning: I2S_Backbone uses {self._n_mv} multivector tokens "
                 f"(adapter_output_size={self.conv_adapter_output}, "
                 f"mv_per_position={self.mv_per_position}). "
                 "This may be memory intensive."
@@ -481,21 +483,13 @@ class I2S_ResNet(nn.Module):
         self.output_mode = output_mode
         if self.output_mode in {"rotor", "multivector_rotor"} and self._mv_dim != 8:
             raise ValueError(
-                "I2S_ResNet rotor/multivector_rotor modes currently require Cl(3,0), "
+                "I2S_Backbone rotor/multivector_rotor modes currently require Cl(3,0), "
                 f"expected mv_dim=8, got mv_dim={self._mv_dim}."
             )
 
-        backbone_weights = torchvision.models.ResNet50_Weights.DEFAULT if pretrained_backbone else None
-        resnet = torchvision.models.resnet50(weights=backbone_weights)
-        self.backbone = nn.Sequential(
-            resnet.conv1,
-            resnet.bn1,
-            resnet.relu,
-            resnet.maxpool,
-            resnet.layer1,
-            resnet.layer2,
-            resnet.layer3,
-            resnet.layer4,
+        self.backbone, backbone_channels = self._build_backbone(
+            backbone_name=self.backbone_name,
+            pretrained_backbone=pretrained_backbone,
         )
 
         if freeze_backbone:
@@ -503,7 +497,7 @@ class I2S_ResNet(nn.Module):
                 p.requires_grad = False
 
         self.conv_adapter = nn.Sequential(
-            nn.Conv2d(2048, self.adapter_high_channels, kernel_size=1, bias=False),
+            nn.Conv2d(backbone_channels, self.adapter_high_channels, kernel_size=1, bias=False),
             nn.BatchNorm2d(self.adapter_high_channels),
             nn.SiLU(inplace=True),
 
@@ -563,6 +557,29 @@ class I2S_ResNet(nn.Module):
         self.register_buffer("so3_xyx", xyx, persistent=False)
         self.register_buffer("so3_wigner_T", wign.transpose(0, 1).contiguous(), persistent=False)
         self.register_buffer("so3_rotmats_cache", o3.angles_to_matrix(*self.so3_xyx), persistent=False)
+
+    def _build_backbone(self, backbone_name: str, pretrained_backbone: bool):
+        if backbone_name == "resnet50":
+            backbone_weights = torchvision.models.ResNet50_Weights.DEFAULT if pretrained_backbone else None
+            resnet = torchvision.models.resnet50(weights=backbone_weights)
+            backbone = nn.Sequential(
+                resnet.conv1,
+                resnet.bn1,
+                resnet.relu,
+                resnet.maxpool,
+                resnet.layer1,
+                resnet.layer2,
+                resnet.layer3,
+                resnet.layer4,
+            )
+            return backbone, 2048
+
+        if backbone_name == "convnext_tiny":
+            backbone_weights = torchvision.models.ConvNeXt_Tiny_Weights.DEFAULT if pretrained_backbone else None
+            convnext = torchvision.models.convnext_tiny(weights=backbone_weights)
+            return convnext.features, 768
+
+        raise ValueError(f"Unsupported backbone_name: {backbone_name}")
 
     def _resolve_mode(self):
         if self.output_mode != "auto":
@@ -677,3 +694,6 @@ class I2S_ResNet(nn.Module):
     @torch.no_grad()
     def get_nearest_idx(self, rot_gt: torch.Tensor):
         return nearest_rotmat(rot_gt, self.so3_rotmats_cache)
+
+
+I2S_ResNet = I2S_Backbone

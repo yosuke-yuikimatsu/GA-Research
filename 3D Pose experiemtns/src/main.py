@@ -6,7 +6,7 @@ from clifford.algebra.cliffordalgebra import CliffordAlgebra
 
 from src.config import create_argparser
 from src.dataset import create_dataloaders
-from src.model import TralaleroCompetitor, MLPBaseline, I2S, GA_I2S, I2S_ResNet
+from src.model import TralaleroCompetitor, MLPBaseline, I2S, GA_I2S, I2S_Backbone, I2S_ResNet
 from src.train_utils import (
     train,
     form_checkpoint,
@@ -111,12 +111,13 @@ def instantiate(config):
                 output_mode = "multivector_rotor"
             else:
                 output_mode = "rotation_matrix"
-        model = I2S_ResNet(
+        model = I2S_Backbone(
             algebra=algebra,
             lmax=config.lmax,
             rec_level=config.rec_level,
             hidden_dim=config.hidden_dim,
             temperature=config.temperature,
+            backbone_name=config.i2s_resnet_backbone_name,
             pretrained_backbone=config.i2s_resnet_pretrained_backbone,
             freeze_backbone=config.i2s_resnet_freeze_backbone,
             use_positional_encoding=config.i2s_resnet_use_positional_encoding,
