@@ -126,6 +126,8 @@ def instantiate(config):
             adapter_mid_channels=config.i2s_resnet_adapter_mid_channels,
             adapter_high_channels=config.i2s_resnet_adapter_high_channels,
             adapter_output_size=config.i2s_resnet_adapter_output_size,
+            ga_head_type=config.i2s_resnet_ga_head_type,
+            ga_head_mixing_layer=config.i2s_resnet_ga_head_mixing_layer,
         )
     else:
         raise ValueError(f"Unknown model: {config.model}")

@@ -6,6 +6,7 @@ import torchvision
 from clifford.models.modules.gp import SteerableGeometricProductLayer
 from clifford.models.modules.mvsilu import MVSiLU
 from clifford.models.modules.fcgp import FullyConnectedSteerableGeometricProductLayer
+from clifford.models.modules.linear import MVLinear
 from image_encoders import build_encoder
 from image2sphere.so3_utils import so3_healpix_grid, flat_wigner, nearest_rotmat
 from e3nn import o3
@@ -330,6 +331,80 @@ class TralaleroTralala(nn.Module):
         return x
 
 
+class ReducedGeometricProductHead(nn.Module):
+    def __init__(
+        self,
+        algebra,
+        in_features: int = 512,
+        hidden_dim: Union[int, List[int]] = 32,
+        out_features: int = 9,
+        mixing_layer: str = "gp",
+    ):
+        super().__init__()
+
+        if isinstance(hidden_dim, int):
+            hidden_dims = [hidden_dim]
+        else:
+            hidden_dims = list(hidden_dim)
+
+        if len(hidden_dims) == 0:
+            raise ValueError("hidden_dim must be a non-empty int or List[int]")
+
+        self.mixing_layer = str(mixing_layer).lower()
+        if self.mixing_layer not in {"gp", "mvlinear", "linear"}:
+            raise ValueError("mixing_layer must be one of: gp, mvlinear, linear")
+
+        self.blocks = nn.ModuleList()
+        prev = in_features
+
+        for hd in hidden_dims:
+            self.blocks.append(
+                nn.ModuleDict({
+                    "fc": FullyConnectedSteerableGeometricProductLayer(
+                        algebra, in_features=prev, out_features=hd
+                    ),
+                    "act1": MVSiLU(algebra, hd),
+                    "mix": self._build_mixing_layer(algebra=algebra, channels=hd),
+                    "act2": MVSiLU(algebra, hd),
+                })
+            )
+            prev = hd
+
+        self.out = FullyConnectedSteerableGeometricProductLayer(
+            algebra, in_features=prev, out_features=out_features
+        )
+
+    def _build_mixing_layer(self, algebra, channels: int):
+        if self.mixing_layer == "gp":
+            return SteerableGeometricProductLayer(algebra, channels)
+        if self.mixing_layer == "mvlinear":
+            return MVLinear(algebra, channels, channels)
+        if self.mixing_layer == "linear":
+            return nn.Linear(channels * (2**algebra.dim), channels * (2**algebra.dim))
+        raise ValueError(f"Unsupported mixing_layer: {self.mixing_layer}")
+
+    def _apply_mixing(self, layer: nn.Module, x: torch.Tensor) -> torch.Tensor:
+        if self.mixing_layer == "linear":
+            b, n, d = x.shape
+            x = x.reshape(b, n * d)
+            x = layer(x)
+            return x.reshape(b, n, d)
+        return layer(x)
+
+    def forward(self, x):
+        if getattr(self, "_extra_tensors_device", None) != x.device:
+            _move_unregistered_tensors_to_device(self, x.device)
+            self._extra_tensors_device = x.device
+
+        for b in self.blocks:
+            x = b["fc"](x)
+            x = b["act1"](x)
+            x = self._apply_mixing(b["mix"], x)
+            x = b["act2"](x)
+        x = self.out(x)
+        return x
+
+
 class TralaleroCompetitor(nn.Module):
     def __init__(self, algebra, encoder_type: str = "resnet", ga_pool_hw: tuple = (28, 28)):
         super().__init__()
@@ -426,6 +501,8 @@ class I2S_Backbone(nn.Module):
         adapter_mid_channels: int = 0,
         adapter_high_channels: int = 0,
         adapter_output_size: int = 16,
+        ga_head_type: str = "tralalero",
+        ga_head_mixing_layer: str = "gp",
     ):
         super().__init__()
         self.algebra = algebra
@@ -433,6 +510,7 @@ class I2S_Backbone(nn.Module):
         self.rec_level = int(rec_level)
         self.temperature = float(temperature)
         self.backbone_name = str(backbone_name).lower()
+        self.hidden_dim = hidden_dim
 
         self._mv_dim = int(2**algebra.dim)
         self.mv_per_position = int(mv_per_position)
@@ -526,37 +604,38 @@ class I2S_Backbone(nn.Module):
             self.positional_embedding = nn.Parameter(torch.zeros(1, self._n_mv, self._mv_dim))
             nn.init.trunc_normal_(self.positional_embedding, std=0.02)
 
+        self.ga_head_type = str(ga_head_type).lower()
+        self.ga_head_mixing_layer = str(ga_head_mixing_layer).lower()
+
         self.num_coeffs = _so3_num_fourier_coeffs(self.lmax)
-        self.ga_head_fourier = TralaleroTralala(
-            algebra=algebra,
-            in_features=self._n_mv,
-            hidden_dim=hidden_dim,
-            out_features=self.num_coeffs,
-        )
-        self.ga_head_rotation = TralaleroTralala(
-            algebra=algebra,
-            in_features=self._n_mv,
-            hidden_dim=hidden_dim,
-            out_features=9,
-        )
-        self.ga_head_rotor = TralaleroTralala(
-            algebra=algebra,
-            in_features=self._n_mv,
-            hidden_dim=hidden_dim,
-            out_features=4,
-        )
-        self.ga_head_mv_rotor = TralaleroTralala(
-            algebra=algebra,
-            in_features=self._n_mv,
-            hidden_dim=hidden_dim,
-            out_features=1,
-        )
+        self.ga_head_fourier = self._build_ga_head(out_features=self.num_coeffs)
+        self.ga_head_rotation = self._build_ga_head(out_features=9)
+        self.ga_head_rotor = self._build_ga_head(out_features=4)
+        self.ga_head_mv_rotor = self._build_ga_head(out_features=1)
 
         xyx = so3_healpix_grid(rec_level=self.rec_level)
         wign = flat_wigner(self.lmax, *xyx)
         self.register_buffer("so3_xyx", xyx, persistent=False)
         self.register_buffer("so3_wigner_T", wign.transpose(0, 1).contiguous(), persistent=False)
         self.register_buffer("so3_rotmats_cache", o3.angles_to_matrix(*self.so3_xyx), persistent=False)
+
+    def _build_ga_head(self, out_features: int):
+        if self.ga_head_type == "tralalero":
+            return TralaleroTralala(
+                algebra=self.algebra,
+                in_features=self._n_mv,
+                hidden_dim=self.hidden_dim,
+                out_features=out_features,
+            )
+        if self.ga_head_type == "reduced":
+            return ReducedGeometricProductHead(
+                algebra=self.algebra,
+                in_features=self._n_mv,
+                hidden_dim=self.hidden_dim,
+                out_features=out_features,
+                mixing_layer=self.ga_head_mixing_layer,
+            )
+        raise ValueError(f"Unsupported ga_head_type: {self.ga_head_type}")
 
     def _build_backbone(self, backbone_name: str, pretrained_backbone: bool):
         if backbone_name == "resnet50":
