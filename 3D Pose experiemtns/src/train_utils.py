@@ -110,7 +110,7 @@ def multivector_rotor_loss(
     even_norm_sq = v0.pow(2) + v4.pow(2) + v5.pow(2) + v6.pow(2)
     penalty_norm = (even_norm_sq - 1.0).pow(2)
 
-    loss_main = (1.0 - product).pow(2)
+    loss_main = (1.0 - product**2).pow(2)
     loss = loss_main + lambda_non_even * penalty_odd + lambda_norm * penalty_norm
     return loss.mean()
 
