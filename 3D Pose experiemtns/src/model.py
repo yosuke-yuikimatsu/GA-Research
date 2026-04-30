@@ -331,6 +331,64 @@ class TralaleroTralala(nn.Module):
         return x
 
 
+
+class TransformerLikeMVBlock(nn.Module):
+    def __init__(self, algebra, n_multivectors: int):
+        super().__init__()
+        if int(n_multivectors) <= 0:
+            raise ValueError("n_multivectors must be positive")
+        n_multivectors = int(n_multivectors)
+
+        self.attn_like = FullyConnectedSteerableGeometricProductLayer(
+            algebra,
+            in_features=n_multivectors,
+            out_features=n_multivectors,
+        )
+        self.up = MVLinear(algebra, n_multivectors, 4 * n_multivectors)
+        self.act = MVSiLU(algebra, 4 * n_multivectors)
+        self.down = MVLinear(algebra, 4 * n_multivectors, n_multivectors)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        attended = self.attn_like(x)
+        x_ffn = self.up(attended)
+        x_ffn = self.act(x_ffn)
+        x_ffn = self.down(x_ffn)
+        return attended + x_ffn
+
+
+class TransformerLikeMVHead(nn.Module):
+    def __init__(
+        self,
+        algebra,
+        in_features: int = 512,
+        hidden_dim: Union[int, List[int]] = 32,
+        out_features: int = 9,
+    ):
+        super().__init__()
+
+        if isinstance(hidden_dim, int):
+            hidden_dims = [hidden_dim]
+        else:
+            hidden_dims = list(hidden_dim)
+
+        if len(hidden_dims) == 0:
+            raise ValueError("hidden_dim must be a non-empty int or List[int]")
+
+        self.blocks = nn.ModuleList(
+            [TransformerLikeMVBlock(algebra, n_multivectors=in_features) for _ in hidden_dims]
+        )
+        self.out = MVLinear(algebra, in_features, out_features)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if getattr(self, "_extra_tensors_device", None) != x.device:
+            _move_unregistered_tensors_to_device(self, x.device)
+            self._extra_tensors_device = x.device
+
+        for block in self.blocks:
+            x = block(x)
+        return self.out(x)
+
+
 class ReducedGeometricProductHead(nn.Module):
     def __init__(
         self,
@@ -627,6 +685,13 @@ class I2S_Backbone(nn.Module):
                 hidden_dim=self.hidden_dim,
                 out_features=out_features,
             )
+        if self.ga_head_type == "transformer_like":
+            return TransformerLikeMVHead(
+                algebra=self.algebra,
+                in_features=self._n_mv,
+                hidden_dim=self.hidden_dim,
+                out_features=out_features,
+            )
         if self.ga_head_type == "reduced":
             return ReducedGeometricProductHead(
                 algebra=self.algebra,
@@ -635,7 +700,7 @@ class I2S_Backbone(nn.Module):
                 out_features=out_features,
                 mixing_layer=self.ga_head_mixing_layer,
             )
-        raise ValueError(f"Unsupported ga_head_type: {self.ga_head_type}")
+        raise ValueError("Unsupported ga_head_type: " f"{self.ga_head_type}. Expected one of: tralalero, transformer_like, reduced")
 
     def _build_backbone(self, backbone_name: str, pretrained_backbone: bool):
         if backbone_name == "resnet50":

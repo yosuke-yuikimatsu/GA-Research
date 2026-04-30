@@ -81,7 +81,7 @@ def create_argparser():
         "--i2s_resnet_ga_head_type",
         type=str,
         default="tralalero",
-        choices=["tralalero", "reduced"],
+        choices=["tralalero", "transformer_like", "reduced"],
     )
     parser.add_argument(
         "--i2s_resnet_ga_head_mixing_layer",
