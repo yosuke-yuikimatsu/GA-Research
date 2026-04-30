@@ -48,6 +48,34 @@ def _project_multivector_to_rotor(mv: torch.Tensor) -> torch.Tensor:
     return rotor
 
 
+def _mv_to_rotation_matrix(mv: torch.Tensor) -> torch.Tensor:
+    if mv.ndim != 2 or mv.shape[-1] != 8:
+        raise ValueError(f"Expected multivector shape [B, 8], got {tuple(mv.shape)}")
+
+    v0 = mv[:, 0]
+    v4 = mv[:, 4]
+    v5 = mv[:, 5]
+    v6 = mv[:, 6]
+
+    norm = torch.sqrt((v0 * v0 + v4 * v4 + v5 * v5 + v6 * v6).clamp_min(1e-8))
+    r0 = v0 / norm
+    r4 = v4 / norm
+    r5 = v5 / norm
+    r6 = v6 / norm
+
+    m = torch.zeros((mv.shape[0], 3, 3), dtype=mv.dtype, device=mv.device)
+    m[:, 0, 0] = 1.0 - 2.0 * (r4 * r4 + r5 * r5)
+    m[:, 0, 1] = 2.0 * (r0 * r4 - r5 * r6)
+    m[:, 0, 2] = 2.0 * (r0 * r5 + r4 * r6)
+    m[:, 1, 0] = -2.0 * (r0 * r4 + r5 * r6)
+    m[:, 1, 1] = 1.0 - 2.0 * (r4 * r4 + r6 * r6)
+    m[:, 1, 2] = 2.0 * (r0 * r6 - r4 * r5)
+    m[:, 2, 0] = 2.0 * (r4 * r6 - r0 * r5)
+    m[:, 2, 1] = 2.0 * (r0 * r6 + r4 * r5)
+    m[:, 2, 2] = 1.0 - 2.0 * (r6 * r6 + r5 * r5)
+    return m
+
+
 def _so3_num_fourier_coeffs(lmax: int) -> int:
     return sum([(2 * l + 1) ** 2 for l in range(lmax + 1)])
 
@@ -830,8 +858,7 @@ class I2S_Backbone(nn.Module):
             return _unit_quaternion_to_matrix(out)
 
         if mode == "multivector_rotor":
-            rotor = _project_multivector_to_rotor(out)
-            return _unit_quaternion_to_matrix(rotor)
+            return _mv_to_rotation_matrix(out)
 
         raise ValueError(f"Unsupported mode: {mode}")
 
