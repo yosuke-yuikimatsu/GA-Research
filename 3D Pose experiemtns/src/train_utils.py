@@ -79,40 +79,20 @@ def rotor_loss(pred: torch.Tensor, target_rot: torch.Tensor) -> torch.Tensor:
 
 
 def multivector_rotor_loss(
-    pred_mv: torch.Tensor,
-    target_rot: torch.Tensor,
-    lambda_non_even: float = 1.0,
-    lambda_norm: float = 1.0,
-) -> torch.Tensor:
-    if pred_mv.ndim != 2 or pred_mv.shape[-1] != 8:
-        raise ValueError(
-            "multivector_rotor_loss currently supports only Cl(3,0), "
-            f"expected pred_mv shape [B, 8], got {tuple(pred_mv.shape)}"
-        )
+    pred_mv,
+    target_rot,
+    lambda_non_even=0.0,
+    lambda_norm=0.0,
+):
+    target = matrix_to_unit_quaternion(target_rot)
 
-    if target_rot.ndim != 3 or target_rot.shape[-2:] != (3, 3):
-        raise ValueError(
-            f"Expected rotation matrices with shape [B, 3, 3], got {tuple(target_rot.shape)}"
-        )
+    pred = pred_mv[:, [0, 4, 5, 6]]
+    pred = pred / pred.norm(dim=-1, keepdim=True).clamp_min(1e-8)
 
-    tr = target_rot[:, 0, 0] + target_rot[:, 1, 1] + target_rot[:, 2, 2]
-    denom = 2.0 * torch.sqrt((1.0 + tr).clamp_min(1e-8))
+    target = target / target.norm(dim=-1, keepdim=True).clamp_min(1e-8)
 
-    u0 = (1.0 + tr) / denom
-    u4 = (target_rot[:, 0, 1] - target_rot[:, 1, 0]) / denom
-    u5 = (target_rot[:, 0, 2] - target_rot[:, 2, 0]) / denom
-    u6 = (target_rot[:, 1, 2] - target_rot[:, 2, 1]) / denom
-
-    v0, v1, v2, v3, v4, v5, v6, v7 = pred_mv.unbind(dim=1)
-    product = u0 * v0 + u4 * v4 + u5 * v5 + u6 * v6
-
-    penalty_odd = torch.abs(v1) + torch.abs(v2) + torch.abs(v3) + torch.abs(v7)
-    even_norm_sq = v0.pow(2) + v4.pow(2) + v5.pow(2) + v6.pow(2)
-    penalty_norm = (even_norm_sq - 1.0).pow(2)
-
-    loss_main = (1.0 - product**2).pow(2)
-    loss = loss_main + lambda_non_even * penalty_odd + lambda_norm * penalty_norm
-    return loss.mean()
+    dot = torch.sum(pred * target, dim=-1).abs()
+    return (1.0 - dot.pow(2)).mean()
 
 
 def form_checkpoint(model, optimizer, scheduler, config):
