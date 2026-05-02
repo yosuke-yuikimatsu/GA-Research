@@ -417,6 +417,104 @@ class TransformerLikeMVHead(nn.Module):
         return self.out(x)
 
 
+class ResidualGeometricProductBlock(nn.Module):
+    def __init__(
+        self,
+        algebra,
+        n_multivectors: int,
+        dropout: float = 0.0,
+        use_layer_norm: bool = False,
+    ):
+        super().__init__()
+
+        if int(n_multivectors) <= 0:
+            raise ValueError("n_multivectors must be positive")
+
+        self.algebra = algebra
+        self.n_multivectors = int(n_multivectors)
+
+        self.norm = nn.LayerNorm(2 ** algebra.dim) if use_layer_norm else nn.Identity()
+
+        self.linear_in = MVLinear(algebra, self.n_multivectors, self.n_multivectors)
+        self.act1 = MVSiLU(algebra, self.n_multivectors)
+        self.gp = SteerableGeometricProductLayer(algebra, self.n_multivectors)
+        self.act2 = MVSiLU(algebra, self.n_multivectors)
+        self.linear_out = MVLinear(algebra, self.n_multivectors, self.n_multivectors)
+
+        self.dropout = nn.Dropout(dropout) if dropout > 0.0 else nn.Identity()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        residual = x
+
+        y = self.norm(x)
+        y = self.linear_in(y)
+        y = self.act1(y)
+        y = self.gp(y)
+        y = self.act2(y)
+        y = self.linear_out(y)
+        y = self.dropout(y)
+
+        return residual + y
+
+
+class ResidualGeometricProductHead(nn.Module):
+    def __init__(
+        self,
+        algebra,
+        in_features: int = 512,
+        hidden_dim: Union[int, List[int]] = 32,
+        out_features: int = 9,
+        num_blocks: int = 2,
+        dropout: float = 0.0,
+        use_layer_norm: bool = False,
+    ):
+        super().__init__()
+
+        self.algebra = algebra
+        self.in_features = int(in_features)
+        self.out_features = int(out_features)
+        self.num_blocks = int(num_blocks)
+
+        if self.in_features <= 0:
+            raise ValueError("in_features must be positive")
+
+        if self.out_features <= 0:
+            raise ValueError("out_features must be positive")
+
+        if self.num_blocks <= 0:
+            raise ValueError("num_blocks must be positive")
+
+        if dropout < 0.0 or dropout >= 1.0:
+            raise ValueError("dropout must be in [0, 1)")
+
+        # Keep hidden_dim only for API compatibility with TralaleroTralala.
+        self.hidden_dim = hidden_dim
+
+        self.blocks = nn.ModuleList(
+            [
+                ResidualGeometricProductBlock(
+                    algebra=algebra,
+                    n_multivectors=self.in_features,
+                    dropout=dropout,
+                    use_layer_norm=use_layer_norm,
+                )
+                for _ in range(self.num_blocks)
+            ]
+        )
+
+        self.out = MVLinear(algebra, self.in_features, self.out_features)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if getattr(self, "_extra_tensors_device", None) != x.device:
+            _move_unregistered_tensors_to_device(self, x.device)
+            self._extra_tensors_device = x.device
+
+        for block in self.blocks:
+            x = block(x)
+
+        return self.out(x)
+
+
 class ReducedGeometricProductHead(nn.Module):
     def __init__(
         self,
@@ -589,6 +687,9 @@ class I2S_Backbone(nn.Module):
         adapter_output_size: int = 16,
         ga_head_type: str = "tralalero",
         ga_head_mixing_layer: str = "gp",
+        ga_head_num_blocks: int = 2,
+        ga_head_dropout: float = 0.0,
+        ga_head_use_layer_norm: bool = False,
     ):
         super().__init__()
         self.algebra = algebra
@@ -692,6 +793,15 @@ class I2S_Backbone(nn.Module):
 
         self.ga_head_type = str(ga_head_type).lower()
         self.ga_head_mixing_layer = str(ga_head_mixing_layer).lower()
+        self.ga_head_num_blocks = int(ga_head_num_blocks)
+        self.ga_head_dropout = float(ga_head_dropout)
+        self.ga_head_use_layer_norm = bool(ga_head_use_layer_norm)
+
+        if self.ga_head_num_blocks <= 0:
+            raise ValueError("ga_head_num_blocks must be positive")
+
+        if self.ga_head_dropout < 0.0 or self.ga_head_dropout >= 1.0:
+            raise ValueError("ga_head_dropout must be in [0, 1)")
 
         self.num_coeffs = _so3_num_fourier_coeffs(self.lmax)
         self.ga_head_fourier = self._build_ga_head(out_features=self.num_coeffs)
@@ -728,7 +838,21 @@ class I2S_Backbone(nn.Module):
                 out_features=out_features,
                 mixing_layer=self.ga_head_mixing_layer,
             )
-        raise ValueError("Unsupported ga_head_type: " f"{self.ga_head_type}. Expected one of: tralalero, transformer_like, reduced")
+        if self.ga_head_type == "residual_gp":
+            return ResidualGeometricProductHead(
+                algebra=self.algebra,
+                in_features=self._n_mv,
+                hidden_dim=self.hidden_dim,
+                out_features=out_features,
+                num_blocks=self.ga_head_num_blocks,
+                dropout=self.ga_head_dropout,
+                use_layer_norm=self.ga_head_use_layer_norm,
+            )
+        raise ValueError(
+            "Unsupported ga_head_type: "
+            f"{self.ga_head_type}. Expected one of: "
+            "tralalero, transformer_like, reduced, residual_gp"
+        )
 
     def _build_backbone(self, backbone_name: str, pretrained_backbone: bool):
         if backbone_name == "resnet50":

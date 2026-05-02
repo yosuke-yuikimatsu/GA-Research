@@ -81,13 +81,28 @@ def create_argparser():
         "--i2s_resnet_ga_head_type",
         type=str,
         default="tralalero",
-        choices=["tralalero", "transformer_like", "reduced"],
+        choices=["tralalero", "transformer_like", "reduced", "residual_gp"],
     )
     parser.add_argument(
         "--i2s_resnet_ga_head_mixing_layer",
         type=str,
         default="gp",
         choices=["gp", "mvlinear", "linear"],
+    )
+    parser.add_argument(
+        "--i2s_resnet_ga_num_blocks",
+        type=int,
+        default=2,
+    )
+    parser.add_argument(
+        "--i2s_resnet_ga_head_dropout",
+        type=float,
+        default=0.0,
+    )
+    parser.add_argument(
+        "--i2s_resnet_ga_head_use_layer_norm",
+        action=argparse.BooleanOptionalAction,
+        default=False,
     )
     parser.add_argument("--label_smoothing", type=float, default=0.0)
     parser.add_argument("--ram_memory", action=argparse.BooleanOptionalAction, default=False)
@@ -106,3 +121,6 @@ class JsonYamlevich:
     wandb_project: str = "CLIP"
     wandb_entity: str | None = "clifforders"
     wandb_group: str | None = None
+    i2s_resnet_ga_num_blocks: int = 2
+    i2s_resnet_ga_head_dropout: float = 0.0
+    i2s_resnet_ga_head_use_layer_norm: bool = False
