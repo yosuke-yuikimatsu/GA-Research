@@ -18,7 +18,7 @@ def create_argparser():
     parser.add_argument("--model", type=str, default="tralalero",
                         choices=["tralalero", "mlp", "i2s", "ga_i2s", "i2s_resnet"])
     parser.add_argument("--loss", type=str, default="mse",
-                        choices=["mse", "prob", "rotor", "mv_rotor"])
+                        choices=["mse", "geodesic", "prob", "rotor", "mv_rotor"])
     parser.add_argument("--encoder", type=str, default="resnet",
                         choices=["resnet", "ga", "ga_canonical"])
     parser.add_argument("--algebra_dim", type=int, default=3)
