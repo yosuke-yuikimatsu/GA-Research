@@ -167,3 +167,49 @@ def train(model, train_loader, val_loader, optimizer, scheduler, criterion, run,
             f"Training on {config.device} epoch {i + 1} / {config.n_epochs}. "
             f"Train loss {train_loss}, val loss {val_loss}"
         )
+
+
+def rotation_matrix_loss(pred, target, alpha=0.1, beta=0.01):
+    mse = torch.mean((pred - target) ** 2)
+
+    eye = torch.eye(3, device=pred.device, dtype=pred.dtype).unsqueeze(0)
+    ortho = torch.mean((pred.transpose(1, 2) @ pred - eye) ** 2)
+
+    det_loss = torch.mean((torch.det(pred) - 1.0) ** 2)
+
+    return mse + alpha * ortho + beta * det_loss
+
+
+def project_to_rotation_matrix(x: torch.Tensor) -> torch.Tensor:
+    u, _, vh = torch.linalg.svd(x)
+    r = u @ vh
+
+    det = torch.det(r)
+
+    correction = torch.eye(3, device=x.device, dtype=x.dtype).unsqueeze(0).repeat(x.shape[0], 1, 1)
+    correction[:, -1, -1] = torch.where(
+        det < 0,
+        torch.tensor(-1.0, device=x.device, dtype=x.dtype),
+        torch.tensor(1.0, device=x.device, dtype=x.dtype),
+    )
+
+    return u @ correction @ vh
+
+
+def geodesic_rotation_matrix_loss(pred, target, alpha=0.01, beta=0.001):
+    pred_rot = project_to_rotation_matrix(pred)
+
+    relative = pred_rot.transpose(1, 2) @ target
+
+    trace = relative[:, 0, 0] + relative[:, 1, 1] + relative[:, 2, 2]
+    cos_theta = (trace - 1.0) / 2.0
+    cos_theta = cos_theta.clamp(-1.0 + 1e-6, 1.0 - 1e-6)
+
+    angle_loss = torch.acos(cos_theta).mean()
+
+    eye = torch.eye(3, device=pred.device, dtype=pred.dtype).unsqueeze(0)
+    ortho = torch.mean((pred.transpose(1, 2) @ pred - eye) ** 2)
+
+    det_loss = torch.mean((torch.det(pred) - 1.0) ** 2)
+
+    return angle_loss + alpha * ortho + beta * det_loss
