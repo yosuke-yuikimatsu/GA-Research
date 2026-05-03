@@ -14,6 +14,7 @@ from src.train_utils import (
     load_checkpoint,
     maybe_wrap_model_for_multi_gpu,
     rotation_matrix_loss,
+    geodesic_rotation_matrix_loss,
     rotor_loss,
     multivector_rotor_loss,
 )
@@ -165,6 +166,8 @@ def instantiate(config):
 
     if config.loss == "mse":
         criterion = rotation_matrix_loss
+    elif config.loss == "geodesic":
+        criterion = geodesic_rotation_matrix_loss
     elif config.loss == "prob":
         criterion = nn.CrossEntropyLoss(label_smoothing=config.label_smoothing)
     elif config.loss == "rotor":
