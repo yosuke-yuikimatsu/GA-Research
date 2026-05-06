@@ -719,28 +719,42 @@ class I2S_Backbone(nn.Module):
         auto_mid_channels = max(64, adapter_out_channels * 2)
         auto_high_channels = max(256, auto_mid_channels * 2)
 
+        adapter_mid_channels = int(adapter_mid_channels)
+        adapter_high_channels = int(adapter_high_channels)
+
+        if adapter_mid_channels < -1:
+            raise ValueError("adapter_mid_channels must be -1, 0, or a positive integer")
+
+        if adapter_high_channels < -1:
+            raise ValueError("adapter_high_channels must be -1, 0, or a positive integer")
+
         self.adapter_mid_channels = (
-            int(adapter_mid_channels)
-            if int(adapter_mid_channels) > 0
-            else auto_mid_channels
+            auto_mid_channels
+            if adapter_mid_channels == 0
+            else adapter_mid_channels
         )
 
         self.adapter_high_channels = (
-            int(adapter_high_channels)
-            if int(adapter_high_channels) > 0
-            else auto_high_channels
+            auto_high_channels
+            if adapter_high_channels == 0
+            else adapter_high_channels
         )
 
-        if self.adapter_mid_channels < adapter_out_channels:
+        if 0 < self.adapter_mid_channels < adapter_out_channels:
             raise ValueError(
-                "adapter_mid_channels must be >= mv_per_position * mv_dim "
+                "adapter_mid_channels must be -1, 0, or >= mv_per_position * mv_dim "
                 f"({adapter_out_channels}), got {self.adapter_mid_channels}"
             )
 
-        if self.adapter_high_channels < self.adapter_mid_channels:
+        if (
+            self.adapter_high_channels > 0
+            and self.adapter_mid_channels > 0
+            and self.adapter_high_channels < self.adapter_mid_channels
+        ):
             raise ValueError(
-                "adapter_high_channels must be >= adapter_mid_channels, "
-                f"got high={self.adapter_high_channels}, mid={self.adapter_mid_channels}"
+                "adapter_high_channels must be -1, 0, or >= adapter_mid_channels "
+                f"when both blocks are enabled, got high={self.adapter_high_channels}, "
+                f"mid={self.adapter_mid_channels}"
             )
 
         if output_mode not in {"auto", "rotation_matrix", "fourier", "rotor", "multivector_rotor"}:
@@ -761,30 +775,59 @@ class I2S_Backbone(nn.Module):
             for p in self.backbone.parameters():
                 p.requires_grad = False
 
-        self.conv_adapter = nn.Sequential(
-            nn.Conv2d(backbone_channels, self.adapter_high_channels, kernel_size=1, bias=False),
-            nn.BatchNorm2d(self.adapter_high_channels),
-            nn.SiLU(inplace=True),
+        adapter_layers = []
+        adapter_in_channels = backbone_channels
 
-            nn.Conv2d(
-                self.adapter_high_channels,
-                self.adapter_mid_channels,
-                kernel_size=3,
-                padding=1,
-                bias=False,
-            ),
-            nn.BatchNorm2d(self.adapter_mid_channels),
-            nn.SiLU(inplace=True),
+        if self.adapter_high_channels > 0:
+            adapter_layers.extend(
+                [
+                    nn.Conv2d(
+                        adapter_in_channels,
+                        self.adapter_high_channels,
+                        kernel_size=1,
+                        bias=False,
+                    ),
+                    nn.BatchNorm2d(self.adapter_high_channels),
+                    nn.SiLU(inplace=True),
+                ]
+            )
+            adapter_in_channels = self.adapter_high_channels
+        else:
+            adapter_layers.append(nn.Identity())
 
-            nn.Conv2d(
-                self.adapter_mid_channels,
-                adapter_out_channels,
-                kernel_size=1,
-                bias=True,
-            ),
+        if self.adapter_mid_channels > 0:
+            adapter_layers.extend(
+                [
+                    nn.Conv2d(
+                        adapter_in_channels,
+                        self.adapter_mid_channels,
+                        kernel_size=3,
+                        padding=1,
+                        bias=False,
+                    ),
+                    nn.BatchNorm2d(self.adapter_mid_channels),
+                    nn.SiLU(inplace=True),
+                ]
+            )
+            adapter_in_channels = self.adapter_mid_channels
+        else:
+            adapter_layers.append(nn.Identity())
 
-            nn.AdaptiveAvgPool2d((self.conv_adapter_output, self.conv_adapter_output)),
+        adapter_layers.extend(
+            [
+                nn.Conv2d(
+                    adapter_in_channels,
+                    adapter_out_channels,
+                    kernel_size=1,
+                    bias=True,
+                ),
+                nn.AdaptiveAvgPool2d(
+                    (self.conv_adapter_output, self.conv_adapter_output)
+                ),
+            ]
         )
+
+        self.conv_adapter = nn.Sequential(*adapter_layers)
 
         self.use_positional_encoding = bool(use_positional_encoding)
         if self.use_positional_encoding:
