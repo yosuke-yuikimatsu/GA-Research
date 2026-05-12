@@ -24,6 +24,12 @@ def create_argparser():
     parser.add_argument("--algebra_dim", type=int, default=3)
 
     # ViT baseline
+    parser.add_argument(
+        "--vit_backbone_type",
+        type=str,
+        default="vit",
+        choices=["vit", "depth_anything_v2"],
+    )
     parser.add_argument("--vit_model_name", type=str, default="google/vit-base-patch16-224-in21k")
     parser.add_argument("--vit_layers", type=int, nargs="+", default=[-1, -3, -6, -9])
     parser.add_argument("--freeze_vit", action=argparse.BooleanOptionalAction, default=True)
@@ -126,6 +132,10 @@ class JsonYamlevich:
     wandb_project: str = "CLIP"
     wandb_entity: str | None = "clifforders"
     wandb_group: str | None = None
+    vit_backbone_type: str = "vit"
+    vit_model_name: str = "google/vit-base-patch16-224-in21k"
+    vit_layers: tuple = (-1, -3, -6, -9)
+    freeze_vit: bool = True
     i2s_resnet_ga_num_blocks: int = 2
     i2s_resnet_ga_head_dropout: float = 0.0
     i2s_resnet_ga_head_use_layer_norm: bool = False

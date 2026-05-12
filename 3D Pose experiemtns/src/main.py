@@ -83,6 +83,7 @@ def instantiate(config):
     elif config.model == "vit_baseline":
         model = ViTMultiLayerPoseBaseline(
             model_name=config.vit_model_name,
+            backbone_type=config.vit_backbone_type,
             layers=tuple(config.vit_layers),
             freeze_vit=config.freeze_vit,
         )
