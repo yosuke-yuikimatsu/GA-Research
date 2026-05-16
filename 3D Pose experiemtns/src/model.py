@@ -838,6 +838,143 @@ class AttentionPool(nn.Module):
         return (x * weights).sum(dim=1)
 
 
+class SimpleFullGeometricProductPoseHead(nn.Module):
+    def __init__(
+        self,
+        algebra,
+        input_dim: int = 512,
+        input_features: int = 196,
+        hidden_dim: list[int] | int = [32],
+        out_features: int = 9,
+        readout_type: str = "linear",
+    ):
+        super().__init__()
+
+        if algebra is None:
+            raise ValueError("algebra must be provided")
+
+        self.algebra = algebra
+        self.input_dim = int(input_dim)
+        self.input_features = int(input_features)
+        self.mv_dim = 2 ** algebra.dim
+        self.out_features = int(out_features)
+        self.readout_type = str(readout_type).lower()
+
+        if self.input_dim <= 0:
+            raise ValueError("input_dim must be positive")
+        if self.input_features <= 0:
+            raise ValueError("input_features must be positive")
+        if self.out_features != 9:
+            raise ValueError("out_features must be 9 to form a 3x3 pose matrix")
+        valid_readout_types = {"scalar", "mean", "linear", "grade"}
+        if self.readout_type not in valid_readout_types:
+            raise ValueError(
+                "readout_type must be one of "
+                f"{sorted(valid_readout_types)}, got {readout_type!r}"
+            )
+
+        if isinstance(hidden_dim, int):
+            hidden_dims = [hidden_dim]
+        else:
+            hidden_dims = list(hidden_dim)
+        if len(hidden_dims) == 0:
+            raise ValueError("hidden_dim must be a non-empty int or list[int]")
+        hidden_dims = [int(hd) for hd in hidden_dims]
+        if any(hd <= 0 for hd in hidden_dims):
+            raise ValueError("all hidden_dim values must be positive")
+
+        self.to_mv = nn.Sequential(
+            nn.LayerNorm(self.input_dim),
+            nn.Linear(self.input_dim, self.mv_dim),
+        )
+
+        self.blocks = nn.ModuleList()
+        prev_features = self.input_features
+        for hd in hidden_dims:
+            self.blocks.append(
+                nn.ModuleDict({
+                    "gp": FullyConnectedSteerableGeometricProductLayer(
+                        algebra,
+                        in_features=prev_features,
+                        out_features=hd,
+                    ),
+                    "act": MVSiLU(algebra, hd),
+                })
+            )
+            prev_features = hd
+
+        self.out = FullyConnectedSteerableGeometricProductLayer(
+            algebra,
+            in_features=prev_features,
+            out_features=self.out_features,
+        )
+
+        if self.readout_type == "linear":
+            self.mv_to_scalar = nn.Linear(self.mv_dim, 1)
+        elif self.readout_type == "grade":
+            self.grade_indices = []
+            for grade in range(algebra.dim + 1):
+                indices = [
+                    idx for idx in range(self.mv_dim)
+                    if int(idx).bit_count() == grade
+                ]
+                self.grade_indices.append(indices)
+            self.mv_to_scalar = nn.Linear(algebra.dim + 1, 1)
+        else:
+            self.mv_to_scalar = None
+
+    def forward(self, patch_embeddings: torch.Tensor) -> torch.Tensor:
+        if getattr(self, "_extra_tensors_device", None) != patch_embeddings.device:
+            _move_unregistered_tensors_to_device(self, patch_embeddings.device)
+            self._extra_tensors_device = patch_embeddings.device
+
+        if patch_embeddings.ndim != 3:
+            raise ValueError(
+                f"Expected patch_embeddings shape [B, N, C], got {tuple(patch_embeddings.shape)}"
+            )
+
+        batch_size, num_patches, embedding_dim = patch_embeddings.shape
+
+        if num_patches != self.input_features:
+            raise RuntimeError(
+                f"GA pooling expected {self.input_features} patch tokens from config, got {num_patches}. "
+                "Set --vit_ga_input_features to match the actual token count produced by the backbone/token_mlp."
+            )
+
+        if embedding_dim != self.input_dim:
+            raise RuntimeError(
+                f"GA pooling expected embedding_dim={self.input_dim}, got {embedding_dim}"
+            )
+
+        x = self.to_mv(patch_embeddings)
+
+        for block in self.blocks:
+            x = block["gp"](x)
+            x = block["act"](x)
+
+        out_mv = self.out(x)
+
+        if self.readout_type == "scalar":
+            out = out_mv[:, :, 0]
+        elif self.readout_type == "mean":
+            out = out_mv.mean(dim=-1)
+        elif self.readout_type == "linear":
+            out = self.mv_to_scalar(out_mv).squeeze(-1)
+        elif self.readout_type == "grade":
+            grade_values = []
+            for indices in self.grade_indices:
+                grade_component = out_mv[:, :, indices]
+                grade_value = grade_component.norm(dim=-1)
+                grade_values.append(grade_value)
+
+            grade_features = torch.stack(grade_values, dim=-1)
+            out = self.mv_to_scalar(grade_features).squeeze(-1)
+        else:
+            raise RuntimeError("Unexpected readout_type")
+
+        return out.view(batch_size, 3, 3)
+
+
 class ViTMultiLayerPoseBaseline(nn.Module):
     def __init__(
         self,
@@ -850,6 +987,10 @@ class ViTMultiLayerPoseBaseline(nn.Module):
         transformer_nhead: int = 8,
         transformer_ff_dim: int = 1024,
         transformer_dropout: float = 0.1,
+        algebra=None,
+        ga_input_features: int = 196,
+        ga_hidden_dim: list[int] | int = [32],
+        ga_readout_type: str = "linear",
     ):
         super().__init__()
 
@@ -864,6 +1005,7 @@ class ViTMultiLayerPoseBaseline(nn.Module):
             "attention",
             "transformer_attention",
             "convolution",
+            "ga",
         }
         if self.pooling_type not in valid_pooling_types:
             raise ValueError(
@@ -959,8 +1101,23 @@ class ViTMultiLayerPoseBaseline(nn.Module):
                 nn.AdaptiveAvgPool2d((3, 3)),
                 nn.Conv2d(128, 1, kernel_size=1),
             )
+        elif self.pooling_type == "ga":
+            self.patch_transformer = nn.Identity()
+            self.pool = None
 
-        if self.pooling_type != "convolution":
+            if algebra is None:
+                raise ValueError("pooling_type='ga' requires algebra to be passed")
+
+            self.ga_pose_head = SimpleFullGeometricProductPoseHead(
+                algebra=algebra,
+                input_dim=512,
+                input_features=ga_input_features,
+                hidden_dim=ga_hidden_dim,
+                out_features=9,
+                readout_type=ga_readout_type,
+            )
+
+        if self.pooling_type not in {"convolution", "ga"}:
             self.pose_head = nn.Sequential(
                 nn.Linear(512, 256),
                 nn.GELU(),
@@ -976,6 +1133,9 @@ class ViTMultiLayerPoseBaseline(nn.Module):
         patch_features = flattened_spatial.transpose(1, 2)
 
         patch_embeddings = self.token_mlp(patch_features)
+
+        if self.pooling_type == "ga":
+            return self.ga_pose_head(patch_embeddings)
 
         if self.pooling_type == "convolution":
             batch_size, num_patches, embedding_dim = patch_embeddings.shape

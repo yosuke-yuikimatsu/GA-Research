@@ -37,12 +37,20 @@ def create_argparser():
         "--vit_pooling_type",
         type=str,
         default="mean",
-        choices=["mean", "attention", "transformer_attention", "convolution"],
+        choices=["mean", "attention", "transformer_attention", "convolution", "ga"],
     )
     parser.add_argument("--vit_num_transformer_layers", type=int, default=1)
     parser.add_argument("--vit_transformer_nhead", type=int, default=8)
     parser.add_argument("--vit_transformer_ff_dim", type=int, default=1024)
     parser.add_argument("--vit_transformer_dropout", type=float, default=0.1)
+    parser.add_argument("--vit_ga_input_features", type=int, default=196)
+    parser.add_argument("--vit_ga_hidden_dim", type=int, nargs="+", default=[32])
+    parser.add_argument(
+        "--vit_ga_readout_type",
+        type=str,
+        default="linear",
+        choices=["scalar", "mean", "linear", "grade"],
+    )
 
     # I2S
     parser.add_argument("--lmax", type=int, default=6)
@@ -151,6 +159,9 @@ class JsonYamlevich:
     vit_transformer_nhead: int = 8
     vit_transformer_ff_dim: int = 1024
     vit_transformer_dropout: float = 0.1
+    vit_ga_input_features: int = 196
+    vit_ga_hidden_dim: tuple = (32,)
+    vit_ga_readout_type: str = "linear"
     i2s_resnet_ga_num_blocks: int = 2
     i2s_resnet_ga_head_dropout: float = 0.0
     i2s_resnet_ga_head_use_layer_norm: bool = False
