@@ -51,10 +51,15 @@ def instantiate(config):
     if config.algebra_dim <= 0:
         raise ValueError("algebra_dim must be positive")
 
-    if config.model != "i2s_resnet" and config.algebra_dim != 3:
+    vit_ga_requested = (
+        config.model == "vit_baseline"
+        and str(getattr(config, "vit_pooling_type", "mean")).lower() == "ga"
+    )
+    if config.model != "i2s_resnet" and not vit_ga_requested and config.algebra_dim != 3:
         raise ValueError(
-            "Variable algebra_dim is currently supported only for model='i2s_resnet'. "
-            "Use --model i2s_resnet or set --algebra_dim 3."
+            "Variable algebra_dim is currently supported only for model='i2s_resnet' "
+            "or model='vit_baseline' with --vit_pooling_type ga. "
+            "Use a supported model/pooling combination or set --algebra_dim 3."
         )
 
     rotor_losses = {"rotor", "mv_rotor"}
@@ -91,6 +96,10 @@ def instantiate(config):
             transformer_nhead=getattr(config, "vit_transformer_nhead", 8),
             transformer_ff_dim=getattr(config, "vit_transformer_ff_dim", 1024),
             transformer_dropout=getattr(config, "vit_transformer_dropout", 0.1),
+            algebra=algebra,
+            ga_input_features=getattr(config, "vit_ga_input_features", 196),
+            ga_hidden_dim=getattr(config, "vit_ga_hidden_dim", [32]),
+            ga_readout_type=getattr(config, "vit_ga_readout_type", "linear"),
         )
     elif config.model == "i2s":
         model = I2S(
