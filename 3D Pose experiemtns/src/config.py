@@ -49,7 +49,7 @@ def create_argparser():
         "--vit_ga_readout_type",
         type=str,
         default="linear",
-        choices=["scalar", "mean", "linear", "grade"],
+        choices=["scalar", "mean", "linear", "grade", "rotor"],
     )
 
     # I2S

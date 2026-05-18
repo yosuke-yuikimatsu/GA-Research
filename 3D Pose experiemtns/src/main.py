@@ -44,17 +44,19 @@ def _make_algebra(algebra_dim: int):
 
 
 def instantiate(config):
-    train_loader, val_loader = create_dataloaders(config)
-    print("Created Tralaloaders")
-
     config.algebra_dim = int(config.algebra_dim)
     if config.algebra_dim <= 0:
         raise ValueError("algebra_dim must be positive")
 
+    vit_pooling_type = str(getattr(config, "vit_pooling_type", "mean")).lower()
+    vit_ga_readout_type = str(getattr(config, "vit_ga_readout_type", "linear")).lower()
     vit_ga_requested = (
         config.model == "vit_baseline"
-        and str(getattr(config, "vit_pooling_type", "mean")).lower() == "ga"
+        and vit_pooling_type == "ga"
     )
+    if vit_ga_requested and vit_ga_readout_type == "rotor" and config.algebra_dim != 3:
+        raise ValueError("vit_ga_readout_type='rotor' requires algebra_dim=3 / Cl(3,0)")
+
     if config.model != "i2s_resnet" and not vit_ga_requested and config.algebra_dim != 3:
         raise ValueError(
             "Variable algebra_dim is currently supported only for model='i2s_resnet' "
@@ -76,6 +78,9 @@ def instantiate(config):
         )
 
     algebra = _make_algebra(config.algebra_dim)
+
+    train_loader, val_loader = create_dataloaders(config)
+    print("Created Tralaloaders")
 
     if config.model == "tralalero":
         model = TralaleroCompetitor(
