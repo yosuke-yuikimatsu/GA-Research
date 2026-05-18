@@ -884,15 +884,20 @@ class SimpleFullGeometricProductPoseHead(nn.Module):
             raise ValueError("input_dim must be positive")
         if self.input_features <= 0:
             raise ValueError("input_features must be positive")
-        if self.out_features != 9:
-            raise ValueError("out_features must be 9 to form a 3x3 pose matrix")
-
-        valid_readout_types = {"scalar", "mean", "linear", "grade"}
+        valid_readout_types = {"scalar", "mean", "linear", "grade", "rotor"}
         if self.readout_type not in valid_readout_types:
             raise ValueError(
                 "readout_type must be one of "
                 f"{sorted(valid_readout_types)}, got {readout_type!r}"
             )
+
+        if self.readout_type == "rotor":
+            if algebra.dim != 3:
+                raise ValueError("vit_ga_readout_type='rotor' requires algebra_dim=3 / Cl(3,0)")
+            if self.mv_dim != 8:
+                raise ValueError("rotor readout requires mv_dim=8 for Cl(3,0)")
+        elif self.out_features != 9:
+            raise ValueError("out_features must be 9 to form a 3x3 pose matrix")
 
         hidden_dims = _normalize_optional_hidden_dims(hidden_dim)
 
@@ -923,10 +928,11 @@ class SimpleFullGeometricProductPoseHead(nn.Module):
             )
             prev_features = hd
 
+        effective_out_features = 1 if self.readout_type == "rotor" else self.out_features
         self.out = FullyConnectedSteerableGeometricProductLayer(
             algebra,
             in_features=prev_features,
-            out_features=self.out_features,
+            out_features=effective_out_features,
         )
 
         if self.readout_type == "linear":
@@ -942,6 +948,7 @@ class SimpleFullGeometricProductPoseHead(nn.Module):
             self.mv_to_scalar = nn.Linear(algebra.dim + 1, 1)
         else:
             self.mv_to_scalar = None
+
     def forward(self, patch_embeddings: torch.Tensor) -> torch.Tensor:
         if getattr(self, "_extra_tensors_device", None) != patch_embeddings.device:
             _move_unregistered_tensors_to_device(self, patch_embeddings.device)
@@ -972,6 +979,10 @@ class SimpleFullGeometricProductPoseHead(nn.Module):
             x = block["act"](x)
 
         out_mv = self.out(x)
+
+        if self.readout_type == "rotor":
+            mv = out_mv[:, 0, :]
+            return _mv_to_rotation_matrix(mv)
 
         if self.readout_type == "scalar":
             out = out_mv[:, :, 0]
